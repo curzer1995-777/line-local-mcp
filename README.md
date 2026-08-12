@@ -95,7 +95,6 @@ codex mcp add line -- /完整路徑/line-local-mcp/.venv/bin/line-local-mcp
 
 - 「讀我過去 24 小時的 LINE，排除官方帳號，整理待回覆事項。」
 - 「搜尋最近一週提到『發票』的 LINE 訊息，依聊天室整理。」
-- 「看 Toyota 這個聊天室最近 50 則訊息，告訴我目前卡在哪裡。」
 
 ### 雲端 AI 與 tunnel
 
