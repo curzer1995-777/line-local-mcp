@@ -24,7 +24,7 @@ classifiers = [
 ]
 dependencies = [
   "apsw-sqlite3mc>=3.50",
-  "mcp>=1.13,<2",
+  "mcp>=1.13,<3",
 ]
 
 [project.scripts]
