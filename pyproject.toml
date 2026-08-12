@@ -34,6 +34,8 @@ line-local-mcp = "line_local_mcp.cli:main"
 Homepage = "https://github.com/curzer1995-777/line-local-mcp"
 Repository = "https://github.com/curzer1995-777/line-local-mcp"
 Issues = "https://github.com/curzer1995-777/line-local-mcp/issues"
+Changelog = "https://github.com/curzer1995-777/line-local-mcp/blob/main/CHANGELOG.md"
+Security = "https://github.com/curzer1995-777/line-local-mcp/security/policy"
 
 [project.optional-dependencies]
 test = ["pytest>=8", "pytest-asyncio>=0.23"]

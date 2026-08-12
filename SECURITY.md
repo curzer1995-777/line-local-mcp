@@ -4,6 +4,11 @@
 
 LINE Local MCP is beta software built against undocumented LINE Desktop storage. Security fixes are supported on the latest `main` branch. There is no guarantee that every LINE or macOS release remains compatible.
 
+| Version | Security support |
+| --- | --- |
+| Latest `main` and newest release | Supported on a best-effort basis |
+| Older releases | Not supported; upgrade before reporting |
+
 ## Threat model
 
 The project is designed for one authorized user reading their own locally synchronized LINE history on their own Mac.

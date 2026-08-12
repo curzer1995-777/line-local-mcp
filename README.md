@@ -1,5 +1,9 @@
 # LINE Local MCP
 
+[![Tests](https://github.com/curzer1995-777/line-local-mcp/actions/workflows/tests.yml/badge.svg)](https://github.com/curzer1995-777/line-local-mcp/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg)](https://www.python.org/)
+
 [繁體中文](#繁體中文) · [English](#english)
 
 > **Beta / macOS only / unofficial project.** This project is not affiliated with, endorsed by, or sponsored by LY Corporation or LINE. It accesses private, undocumented local storage that may change without notice.
@@ -168,6 +172,16 @@ python3 -m venv .venv
 
 測試使用合成資料，不需要真實 LINE 對話或金鑰。貢獻方式請見 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
+### 參與開源專案
+
+- 提交問題或功能建議：[GitHub Issues](https://github.com/curzer1995-777/line-local-mcp/issues)
+- 貢獻程式碼：[CONTRIBUTING.md](CONTRIBUTING.md)
+- 支援範圍：[SUPPORT.md](SUPPORT.md)
+- 安全通報：[SECURITY.md](SECURITY.md)
+- 專案治理：[GOVERNANCE.md](GOVERNANCE.md)
+- 版本變更：[CHANGELOG.md](CHANGELOG.md)
+- 社群行為準則：[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+
 ### 限制與免責
 
 - Beta：目前只對一組 macOS／LINE Desktop 環境完成真實端到端驗證。
@@ -210,6 +224,10 @@ codex mcp add line -- /absolute/path/line-local-mcp/.venv/bin/line-local-mcp
 ```
 
 Read the Traditional Chinese sections above for the complete setup, security model, cloud tunnel guidance, troubleshooting, and limitations. Security reports should follow [SECURITY.md](SECURITY.md).
+
+### Open source community
+
+Issues and contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md), [SUPPORT.md](SUPPORT.md), [GOVERNANCE.md](GOVERNANCE.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), and [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

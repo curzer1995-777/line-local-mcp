@@ -1,0 +1,34 @@
+name: Feature request
+description: Suggest an improvement that preserves the read-only, local-first design
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Proposals must preserve the read-only charter. Sending messages, changing read state, extracting sessions, intercepting traffic, or exposing unauthenticated public access is out of scope.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user problem would this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the desired public behavior, not private LINE data.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety boundary
+      options:
+        - label: This proposal remains read-only and does not expose third-party data or credentials.
+          required: true
