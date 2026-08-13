@@ -20,6 +20,29 @@ LINE Local MCP 是一個唯讀的 [Model Context Protocol (MCP)](https://modelco
 
 最初評估過 GUI 自動化，但大量對話會很慢，也可能影響畫面與未讀狀態；只讀取通知則又只能看到對方說了什麼，缺少自己回覆的上下文。最後採用本機唯讀資料庫快照，讓 AI 能在幾秒內讀取完整雙向上下文，同時把「讀取」與「回覆／發送」明確分開。
 
+### 工作場景：LINE 作為長期工作入口，跨來源辨識任務
+
+對長期在工作環境使用 LINE 的人來說，一個任務可能從 LINE 的客戶訊息開始，接著在 Slack 裡由同事補充背景，Gmail 裡留有報價或需求文件，最後再由行事曆上的會議決定期限。若只看單一聊天室，AI 很容易把「已完成」、「等待他人確認」與「尚未回覆」混在一起。
+
+在使用者已授權的前提下，可以把本專案當成 LINE 的唯讀上下文入口，再搭配其他具備唯讀權限的 AI service／connector 讀取：
+
+- LINE 對話：辨識對方的請求、自己是否已回覆，以及對話中的承諾與期限。
+- Slack 頻道與 thread：補充內部討論、負責人、決策與目前阻塞點。
+- Gmail 郵件與 thread：找出正式需求、附件線索、客戶回覆與待確認事項。
+- 行事曆事件：對照會議、預定交付時間與已經排入時段的工作。
+
+AI 可以將相同主題的訊息交叉比對後，產出一份工作 brief，例如：
+
+1. 找出「需要我處理」的任務，依期限、重要性與是否阻塞他人排序。
+2. 將 LINE 的外部請求與 Slack／Gmail 的內部佐證連在一起，避免重複列出同一件事。
+3. 清楚區分「已完成」、「已有回覆但尚未確認」、「承諾過但缺少完成證據」與「待回覆」。
+4. 為每項任務附上來源、目前狀態、下一步與不確定性；找不到期限或負責人時保留為「未知」，不自行補值。
+5. 只提出草稿或提醒，將回覆 LINE、寄信、發 Slack 訊息或修改行事曆保留給使用者核准。
+
+例如，客戶在 LINE 詢問進度、同事在 Slack 說明還在等資料、Gmail 有最新需求版本，而行事曆顯示明天有客戶會議時，AI brief 應該整理成「客戶進度回覆｜明日會議前確認｜目前等待內部資料｜來源：LINE／Slack／Gmail／Calendar」，而不是直接判定為已完成或代替使用者送出訊息。這個場景適合做成每日早上、會議前或每週回顧的 read-only brief。
+
+本專案本身仍只負責讀取 LINE；Slack、Gmail、行事曆與 AI service 的連接方式、權限與保存政策由各自的 connector／AI client 管理。所有跨來源內容都可能進入 AI context，使用前應確認使用者的存取權限、公司政策與服務的隱私／保存設定。
+
 ### 能做什麼
 
 提供 5 個唯讀工具，AI 可依使用者指令自行組合：
@@ -199,6 +222,23 @@ LINE Local MCP is a read-only Model Context Protocol server for searching both s
 ### Why this project exists
 
 The project began with a practical daily-brief problem: relevant work and personal follow-ups often live in LINE, but creating an Official Account, adding family or friends to bot groups, or clicking through every chat is intrusive and slow. Notifications only show the other person's messages and omit the user's replies. A local read-only snapshot provides fast, bidirectional context while keeping reading strictly separate from sending.
+
+### Workplace scenario: LINE as a long-term task inbox
+
+For people who use LINE throughout the workday, one task may start in a customer chat, gain internal context in a Slack channel or thread, receive a formal requirement in Gmail, and acquire a deadline through a calendar event. Looking at only one chat makes it easy to confuse completed work with an unanswered request or a promise that still lacks completion evidence.
+
+With the user's authorization, this project can provide LINE's read-only context alongside other read-only AI services or connectors for:
+
+- LINE conversations: requests, replies, commitments, and stated deadlines.
+- Slack channels and threads: internal decisions, owners, dependencies, and blockers.
+- Gmail threads: formal requirements, customer replies, and document or attachment clues.
+- Calendar events: meetings, scheduled delivery times, and reserved work blocks.
+
+An AI client can correlate the same topic across these sources and produce a brief that identifies tasks requiring the user's attention, links external requests to internal evidence, separates completed items from pending confirmation or unanswered requests, and shows the source, status, next action, and uncertainty for each item. Missing owners or deadlines should remain unknown rather than being inferred. The client can prepare a draft or reminder, while sending a LINE reply, email, Slack message, or calendar change remains a separate user-approved action.
+
+For example, if a customer asks for an update in LINE, a teammate says in Slack that data is still pending, Gmail contains the latest requirements, and a customer meeting is scheduled for tomorrow, the brief should say that the update needs confirmation before tomorrow's meeting and cite those sources. It should not mark the task complete or send a message on the user's behalf. This makes the scenario suitable for a morning brief, meeting-prep brief, or weekly review.
+
+This project still only reads LINE. The connection method, permissions, retention, and privacy policy for Slack, Gmail, Calendar, and the AI service belong to their respective connectors or clients. Treat all cross-source content as potentially entering the AI context and verify access rights and organizational policy before use.
 
 ### Requirements
 
