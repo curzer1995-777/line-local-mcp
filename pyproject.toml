@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "line-local-mcp"
-version = "0.2.0"
+version = "0.3.0"
 description = "Read-only MCP server for searching a user's local LINE Desktop history on macOS"
 readme = "README.md"
 requires-python = ">=3.11"

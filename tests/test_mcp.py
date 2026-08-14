@@ -20,6 +20,7 @@ async def test_mcp_lists_typed_read_only_tools_and_calls_repository(repository, 
             "line_status",
             "list_chats",
             "get_messages",
+            "read_chat_activity",
             "search_messages",
             "get_recent_activity",
         }
@@ -43,7 +44,29 @@ async def test_mcp_lists_typed_read_only_tools_and_calls_repository(repository, 
         assert result.structured_content["schema_version"] == "1"
         assert result.structured_content["ok"] is True
         assert result.structured_content["data"]["count"] == 2
+        assert result.structured_content["data"]["total_matched"] == 2
+        assert result.structured_content["data"]["has_more"] is False
         assert json.loads(result.content[0].text) == result.structured_content
+
+
+@pytest.mark.anyio
+async def test_mcp_reads_all_matching_chat_activity_in_one_call(repository):
+    async with Client(create_server(repository)) as client:
+        result = await client.call_tool(
+            "read_chat_activity",
+            {
+                "name_contains": "Project",
+                "after": "2020-01-01T00:00:00+00:00",
+                "before": "2030-01-01T00:00:00+00:00",
+                "messages_per_chat": 1,
+            },
+        )
+
+    assert result.is_error is False
+    data = result.structured_content["data"]
+    assert data["total_matched_chats"] == 1
+    assert data["chats"][0]["total_matched_messages"] == 2
+    assert data["chats"][0]["messages_have_more"] is True
 
 
 @pytest.mark.anyio

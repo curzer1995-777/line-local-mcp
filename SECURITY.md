@@ -16,9 +16,9 @@ The project is designed for one authorized user reading their own locally synchr
 Security goals:
 
 - Never send, delete, edit, mark read, or otherwise write to LINE.
-- Open only a disposable database snapshot with SQLite read-only flags.
+- Open only an immutable database snapshot with SQLite read-only flags.
 - Never return or log the database decryption key.
-- Store a verified key only in macOS Keychain.
+- Persist a verified key only in macOS Keychain; reuse it only in server-process memory.
 - Bind optional HTTP transport to `127.0.0.1` only.
 - Mark every MCP tool read-only, non-destructive, and closed-world.
 - Exclude official/business accounts by default and redact common secret patterns.
@@ -45,6 +45,17 @@ LINE Desktop encrypts its local database. When no usable key exists, `--setup-ke
 7. Terminates the temporary process and removes temporary files.
 
 The bootstrap does not attach to the original `/Applications/LINE.app`. macOS or LINE may retain container or login metadata created by the temporary app after the temporary bundle is deleted.
+
+## Runtime snapshot and key cache
+
+To avoid copying and reopening the full encrypted database for every tool call, the server may reuse one immutable snapshot for `LINE_MCP_SNAPSHOT_CACHE_SECONDS` (30 seconds by default). Setting the value to `0` disables snapshot reuse.
+
+- A generation fingerprint covers the database main file and any WAL/SHM sidecars. A changed source fingerprint causes a new snapshot generation.
+- The source fingerprint is checked before and after copying. A changing source is discarded and retried instead of exposing a mixed snapshot.
+- Active readers lease their generation. A replaced snapshot is deleted only after its last reader finishes, so an in-flight query cannot switch generations.
+- Snapshot directories are created as private system temporary directories. The latest encrypted snapshot can remain until a later call replaces it or the server process exits; retired snapshots are deleted after their readers finish.
+- After the first Keychain lookup, the decryption key is kept in server-process memory to avoid repeated Keychain subprocess calls. It is never returned through MCP or written to repository files or logs.
+- `snapshot_id` identifies a generation without revealing the database path, key, or message contents. Cache counters are diagnostic metadata only.
 
 ## Deployment guidance
 

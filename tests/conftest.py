@@ -39,7 +39,9 @@ def repository(tmp_path: Path) -> LineRepository:
     cursor = db.cursor()
     cursor.execute("CREATE TABLE _profile (_mid TEXT)")
     cursor.execute("INSERT INTO _profile VALUES ('me')")
-    cursor.execute("CREATE TABLE _contact (_mid TEXT, _displayName TEXT, _capableBuddy INTEGER)")
+    cursor.execute(
+        "CREATE TABLE _contact (_mid TEXT, _displayName TEXT, _capableBuddy INTEGER)"
+    )
     cursor.executemany(
         "INSERT INTO _contact VALUES (?, ?, ?)",
         [("alice", "Alice", 0), ("official", "Shop News", 1), ("me", "Me", 0)],
@@ -69,10 +71,59 @@ def repository(tmp_path: Path) -> LineRepository:
     cursor.executemany(
         "INSERT INTO _message VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         [
-            ("m1", "alice", "alice", 1_786_500_000_000, "Can you confirm?", None, None, 0),
-            ("m2", "alice", "me", 1_786_500_010_000, "Yes. password: abc123", None, None, 0),
-            ("m3", "group-1", "alice", 1_786_500_100_000, "Project update", None, None, 0),
-            ("m4", "official", "official", 1_786_500_200_000, "Project sale", None, None, 0),
+            (
+                "m1",
+                "alice",
+                "alice",
+                1_786_500_000_000,
+                "Can you confirm?",
+                None,
+                None,
+                0,
+            ),
+            (
+                "m2",
+                "alice",
+                "me",
+                1_786_500_010_000,
+                "Yes. password: abc123",
+                None,
+                None,
+                0,
+            ),
+            (
+                "m3",
+                "group-1",
+                "alice",
+                1_786_500_100_000,
+                "Project update",
+                None,
+                None,
+                0,
+            ),
+            (
+                "m4",
+                "official",
+                "official",
+                1_786_500_200_000,
+                "Project sale",
+                None,
+                None,
+                0,
+            ),
+            (
+                "m5",
+                "group-1",
+                "alice",
+                1_786_500_110_000,
+                None,
+                None,
+                (
+                    '{"ALT_TEXT":"Campaign image","FILE_SIZE":"2048","width":"1200",'
+                    '"height":"630","DOWNLOAD_URL":"https://example.invalid/private"}'
+                ),
+                1,
+            ),
         ],
     )
     db.close()

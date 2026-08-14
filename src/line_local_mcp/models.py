@@ -18,6 +18,16 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class SnapshotCacheStatus(StrictModel):
+    enabled: bool
+    ttl_seconds: float = Field(ge=0)
+    hits: NonNegativeInt
+    misses: NonNegativeInt
+    rebuilds: NonNegativeInt
+    consistency_retries: NonNegativeInt
+    keychain_reads: NonNegativeInt
+
+
 class StatusResponse(StrictModel):
     connected: Literal[True]
     read_only: Literal[True]
@@ -26,6 +36,8 @@ class StatusResponse(StrictModel):
     newest_message_at: AwareDatetime | None
     database_modified_at: AwareDatetime | None
     sensitive_text_redaction: bool
+    snapshot_id: str | None = None
+    snapshot_cache: SnapshotCacheStatus | None = None
 
 
 class ChatSummary(StrictModel):
@@ -40,6 +52,22 @@ class ChatSummary(StrictModel):
 class ListChatsResponse(StrictModel):
     chats: list[ChatSummary]
     count: NonNegativeInt
+    total_matched: NonNegativeInt
+    has_more: bool
+    snapshot_id: str | None = None
+
+
+class MessageContentMetadata(StrictModel):
+    alt_text: str | None = None
+    metadata_text: str | None = None
+    file_name: str | None = None
+    file_size_bytes: NonNegativeInt | None = None
+    duration_ms: NonNegativeInt | None = None
+    width: NonNegativeInt | None = None
+    height: NonNegativeInt | None = None
+    media_type: str | None = None
+    download_available: bool = False
+    preview_available: bool = False
 
 
 class Message(StrictModel):
@@ -52,7 +80,9 @@ class Message(StrictModel):
     sender_name: str
     from_me: bool
     text: str
+    text_source: Literal["text", "content_preview", "metadata", "placeholder"]
     content_type: int | None
+    content_metadata: MessageContentMetadata | None = None
     redacted: bool
 
 
@@ -60,23 +90,48 @@ class GetMessagesResponse(StrictModel):
     chat_id: str
     messages: list[Message]
     count: NonNegativeInt
+    total_matched: NonNegativeInt
+    has_more: bool
+    snapshot_id: str | None = None
 
 
 class SearchMessagesResponse(StrictModel):
     query: str
     messages: list[Message]
     count: NonNegativeInt
+    total_matched: NonNegativeInt
+    has_more: bool
+    snapshot_id: str | None = None
 
 
 class ActivityChat(ChatSummary):
     messages: list[Message]
+    message_count: NonNegativeInt
+    total_matched_messages: NonNegativeInt
+    messages_have_more: bool
 
 
 class RecentActivityResponse(StrictModel):
     since: AwareDatetime
     hours: int = Field(ge=1, le=744)
+    source_newest_message_at: AwareDatetime | None
     chats: list[ActivityChat]
     chat_count: NonNegativeInt
+    total_matched_chats: NonNegativeInt
+    has_more_chats: bool
+    snapshot_id: str | None = None
+
+
+class ChatActivityResponse(StrictModel):
+    name_contains: str
+    after: AwareDatetime
+    before: AwareDatetime
+    source_newest_message_at: AwareDatetime | None
+    chats: list[ActivityChat]
+    chat_count: NonNegativeInt
+    total_matched_chats: NonNegativeInt
+    has_more_chats: bool
+    snapshot_id: str | None = None
 
 
 class ToolErrorDetail(StrictModel):
@@ -121,4 +176,8 @@ class SearchMessagesToolOutput(ToolOutput[SearchMessagesResponse]):
 
 
 class RecentActivityToolOutput(ToolOutput[RecentActivityResponse]):
+    pass
+
+
+class ChatActivityToolOutput(ToolOutput[ChatActivityResponse]):
     pass

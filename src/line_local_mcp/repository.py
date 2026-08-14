@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Any
@@ -8,6 +9,9 @@ from typing import Any
 from .config import Settings
 from .database import ConnectionProvider, LineDatabase
 from .redaction import redact_text
+
+NameMaps = tuple[dict[str, str], dict[str, str], dict[str, str], set[str]]
+ChatDirectory = list[dict[str, Any]]
 
 
 def _to_millis(value: str | None) -> int | None:
@@ -23,29 +27,57 @@ def _to_millis(value: str | None) -> int | None:
 def _iso_time(value: int | None) -> str | None:
     if value is None:
         return None
-    return datetime.fromtimestamp(value / 1000).astimezone().isoformat(timespec="seconds")
+    return (
+        datetime.fromtimestamp(value / 1000).astimezone().isoformat(timespec="seconds")
+    )
 
 
 def _chat_type(mid_type: int | None) -> str:
     return {0: "direct", 1: "room", 2: "group"}.get(mid_type, "other")
 
 
-def _message_text(row: dict[str, Any]) -> str:
-    if row.get("_text"):
-        return str(row["_text"])
-    if row.get("_contentPreview"):
-        return str(row["_contentPreview"])
+def _metadata_dict(row: dict[str, Any]) -> dict[str, Any]:
     metadata = row.get("_contentMetadata")
-    if metadata:
-        try:
-            parsed = json.loads(metadata)
-            for key in ("ALT_TEXT", "altText", "text", "title"):
-                if parsed.get(key):
-                    return str(parsed[key])
-        except (TypeError, ValueError):
-            pass
+    if not metadata:
+        return {}
+    try:
+        parsed = json.loads(metadata)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _first_string(metadata: dict[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = metadata.get(key)
+        if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+            rendered = str(value).strip()
+            if rendered:
+                return rendered
+    return None
+
+
+def _nonnegative_int(metadata: dict[str, Any], *keys: str) -> int | None:
+    value = _first_string(metadata, *keys)
+    if value is None:
+        return None
+    try:
+        parsed = int(float(value))
+    except ValueError:
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def _message_text(row: dict[str, Any], metadata: dict[str, Any]) -> tuple[str, str]:
+    if row.get("_text"):
+        return str(row["_text"]), "text"
+    if row.get("_contentPreview"):
+        return str(row["_contentPreview"]), "content_preview"
+    metadata_text = _first_string(metadata, "ALT_TEXT", "altText", "text", "title")
+    if metadata_text is not None:
+        return metadata_text, "metadata"
     labels = {1: "[image]", 2: "[video]", 3: "[audio]", 7: "[sticker]", 14: "[file]"}
-    return labels.get(row.get("_contentType"), "[non-text message]")
+    return labels.get(row.get("_contentType"), "[non-text message]"), "placeholder"
 
 
 class LineRepository:
@@ -57,18 +89,76 @@ class LineRepository:
     ):
         settings = Settings.from_env()
         self.database = database or LineDatabase(settings)
-        self.redact_sensitive = settings.redact_sensitive if redact_sensitive is None else redact_sensitive
+        self.redact_sensitive = (
+            settings.redact_sensitive if redact_sensitive is None else redact_sensitive
+        )
+        self._name_cache_lock = threading.RLock()
+        self._name_cache_token: object | None = None
+        self._name_cache: NameMaps | None = None
+        self._chat_cache_token: object | None = None
+        self._chat_cache: ChatDirectory | None = None
+        self._profile_cache_token: object | None = None
+        self._profile_cache_loaded = False
+        self._profile_cache: str | None = None
+        self._newest_cache_token: object | None = None
+        self._newest_cache_loaded = False
+        self._newest_cache: int | None = None
 
     @staticmethod
-    def _profile_mid(cursor: Any) -> str | None:
+    def _load_profile_mid(cursor: Any) -> str | None:
         row = next(cursor.execute("SELECT _mid FROM _profile LIMIT 1"), None)
         return row["_mid"] if row else None
 
+    def _profile_mid(self, cursor: Any, cache_token: object | None) -> str | None:
+        if cache_token is None:
+            return self._load_profile_mid(cursor)
+        with self._name_cache_lock:
+            if self._profile_cache_token == cache_token and self._profile_cache_loaded:
+                return self._profile_cache
+            loaded = self._load_profile_mid(cursor)
+            self._profile_cache_token = cache_token
+            self._profile_cache_loaded = True
+            self._profile_cache = loaded
+            return loaded
+
     @staticmethod
-    def _name_maps(cursor: Any) -> tuple[dict[str, str], dict[str, str], dict[str, str], set[str]]:
+    def _load_source_newest_message_at(cursor: Any) -> int | None:
+        return next(
+            cursor.execute(
+                """
+                SELECT MAX((
+                  SELECT MAX(message._createdTime)
+                  FROM _message message
+                  WHERE message._chatId = chat._id
+                )) AS ts
+                FROM _chat chat
+                """
+            )
+        )["ts"]
+
+    def _source_newest_message_at(
+        self, cursor: Any, cache_token: object | None
+    ) -> int | None:
+        if cache_token is None:
+            return self._load_source_newest_message_at(cursor)
+        with self._name_cache_lock:
+            if self._newest_cache_token == cache_token and self._newest_cache_loaded:
+                return self._newest_cache
+            loaded = self._load_source_newest_message_at(cursor)
+            self._newest_cache_token = cache_token
+            self._newest_cache_loaded = True
+            self._newest_cache = loaded
+            return loaded
+
+    @staticmethod
+    def _load_name_maps(
+        cursor: Any,
+    ) -> NameMaps:
         contacts: dict[str, str] = {}
         official: set[str] = set()
-        for row in cursor.execute("SELECT _mid, _displayName, _capableBuddy FROM _contact"):
+        for row in cursor.execute(
+            "SELECT _mid, _displayName, _capableBuddy FROM _contact"
+        ):
             contacts[row["_mid"]] = row["_displayName"] or row["_mid"]
             if row["_capableBuddy"] == 1:
                 official.add(row["_mid"])
@@ -77,10 +167,77 @@ class LineRepository:
             for row in cursor.execute("SELECT _chatMid, _chatName FROM _groupChat")
         }
         rooms = {
-            row["_mid"]: row["_mid"]
-            for row in cursor.execute("SELECT _mid FROM _room")
+            row["_mid"]: row["_mid"] for row in cursor.execute("SELECT _mid FROM _room")
         }
         return contacts, groups, rooms, official
+
+    def _name_maps(self, cursor: Any, cache_token: object | None) -> NameMaps:
+        if cache_token is None:
+            return self._load_name_maps(cursor)
+        with self._name_cache_lock:
+            if self._name_cache_token == cache_token and self._name_cache is not None:
+                return self._name_cache
+            loaded = self._load_name_maps(cursor)
+            self._name_cache_token = cache_token
+            self._name_cache = loaded
+            return loaded
+
+    def _load_chat_directory(self, cursor: Any, name_maps: NameMaps) -> ChatDirectory:
+        contacts, groups, rooms, official_ids = name_maps
+        directory: ChatDirectory = []
+        for row in cursor.execute(
+            """
+            SELECT _id, _midType, _lastUpdatedTime, _unreadCount
+            FROM _chat
+            ORDER BY _lastUpdatedTime DESC
+            """
+        ):
+            chat_id = row["_id"]
+            directory.append(
+                {
+                    "chat_id": chat_id,
+                    "name": self._chat_name(
+                        chat_id, row["_midType"], contacts, groups, rooms
+                    ),
+                    "mid_type": row["_midType"],
+                    "updated_at_ms": row["_lastUpdatedTime"],
+                    "unread_count": row["_unreadCount"] or 0,
+                    "is_official": row["_midType"] == 0 and chat_id in official_ids,
+                }
+            )
+        return directory
+
+    def _chat_directory(
+        self, cursor: Any, cache_token: object | None, name_maps: NameMaps
+    ) -> ChatDirectory:
+        if cache_token is None:
+            return self._load_chat_directory(cursor, name_maps)
+        with self._name_cache_lock:
+            if self._chat_cache_token == cache_token and self._chat_cache is not None:
+                return self._chat_cache
+            loaded = self._load_chat_directory(cursor, name_maps)
+            self._chat_cache_token = cache_token
+            self._chat_cache = loaded
+            return loaded
+
+    @staticmethod
+    def _public_chat(chat: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "chat_id": chat["chat_id"],
+            "name": chat["name"],
+            "type": _chat_type(chat["mid_type"]),
+            "updated_at": _iso_time(chat["updated_at_ms"]),
+            "unread_count": chat["unread_count"],
+            "is_official": chat["is_official"],
+        }
+
+    @staticmethod
+    def _cache_token(connection: Any) -> object | None:
+        return getattr(connection, "cache_token", None)
+
+    @staticmethod
+    def _snapshot_id(connection: Any) -> str | None:
+        return getattr(connection, "snapshot_id", None)
 
     @staticmethod
     def _chat_name(
@@ -103,21 +260,80 @@ class LineRepository:
             return value, False
         return redact_text(value)
 
+    def _safe_content_metadata(
+        self, metadata: dict[str, Any]
+    ) -> tuple[dict[str, Any] | None, bool]:
+        result: dict[str, Any] = {}
+        was_redacted = False
+        text_fields = {
+            "alt_text": _first_string(metadata, "ALT_TEXT", "altText"),
+            "metadata_text": _first_string(metadata, "text", "title"),
+            "file_name": _first_string(metadata, "FILE_NAME"),
+        }
+        for field, value in text_fields.items():
+            if value is None:
+                continue
+            safe_value, field_redacted = self._safe_text(value)
+            result[field] = safe_value
+            was_redacted = was_redacted or field_redacted
+
+        numeric_fields = {
+            "file_size_bytes": _nonnegative_int(metadata, "FILE_SIZE"),
+            "duration_ms": _nonnegative_int(metadata, "DURATION"),
+            "width": _nonnegative_int(metadata, "width", "WIDTH"),
+            "height": _nonnegative_int(metadata, "height", "HEIGHT"),
+        }
+        result.update(
+            {
+                field: value
+                for field, value in numeric_fields.items()
+                if value is not None
+            }
+        )
+        media_type = _first_string(metadata, "mediaType", "contentType")
+        if media_type is not None:
+            result["media_type"] = media_type
+
+        if not result and not any(
+            metadata.get(key)
+            for key in ("DOWNLOAD_URL", "PREVIEW_URL", "downloadUrl", "previewUrl")
+        ):
+            return None, was_redacted
+        result["download_available"] = bool(
+            metadata.get("DOWNLOAD_URL") or metadata.get("downloadUrl")
+        )
+        result["preview_available"] = bool(
+            metadata.get("PREVIEW_URL") or metadata.get("previewUrl")
+        )
+        return result, was_redacted
+
     def status(self) -> dict[str, Any]:
         with self.database.connection() as connection:
             cursor = connection.cursor()
+            snapshot_id = self._snapshot_id(connection)
+            cache_token = self._cache_token(connection)
             chats = next(cursor.execute("SELECT COUNT(*) AS n FROM _chat"))["n"]
             messages = next(cursor.execute("SELECT COUNT(*) AS n FROM _message"))["n"]
-            newest = next(cursor.execute("SELECT MAX(_createdTime) AS ts FROM _message"))["ts"]
-        modified = self.database.modified_at() if hasattr(self.database, "modified_at") else None
+            newest = self._source_newest_message_at(cursor, cache_token)
+        modified = (
+            self.database.modified_at()
+            if hasattr(self.database, "modified_at")
+            else None
+        )
         return {
             "connected": True,
             "read_only": True,
             "chat_count": chats,
             "message_count": messages,
             "newest_message_at": _iso_time(newest),
-            "database_modified_at": _iso_time(int(modified * 1000)) if modified else None,
+            "database_modified_at": _iso_time(int(modified * 1000))
+            if modified
+            else None,
             "sensitive_text_redaction": self.redact_sensitive,
+            "snapshot_id": snapshot_id,
+            "snapshot_cache": self.database.cache_info()
+            if hasattr(self.database, "cache_info")
+            else None,
         }
 
     def list_chats(
@@ -133,50 +349,31 @@ class LineRepository:
         cutoff = _to_millis(updated_after)
         with self.database.connection() as connection:
             cursor = connection.cursor()
-            contacts, groups, rooms, official_ids = self._name_maps(cursor)
-            clauses: list[str] = []
-            params: list[Any] = []
-            if unread_only:
-                clauses.append("_unreadCount > 0")
-            if cutoff is not None:
-                clauses.append("_lastUpdatedTime >= ?")
-                params.append(cutoff)
-            where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-            rows = list(
-                cursor.execute(
-                    f"""
-                    SELECT _id, _midType, _lastUpdatedTime, _unreadCount
-                    FROM _chat {where}
-                    ORDER BY _lastUpdatedTime DESC
-                    LIMIT ?
-                    """,
-                    (*params, min(limit * 8, 1600)),
-                )
-            )
+            snapshot_id = self._snapshot_id(connection)
+            cache_token = self._cache_token(connection)
+            name_maps = self._name_maps(cursor, cache_token)
+            directory = self._chat_directory(cursor, cache_token, name_maps)
 
-        chats: list[dict[str, Any]] = []
+        matched_chats: list[dict[str, Any]] = []
         needle = name_contains.casefold() if name_contains else None
-        for row in rows:
-            chat_id = row["_id"]
-            name = self._chat_name(chat_id, row["_midType"], contacts, groups, rooms)
-            is_official = row["_midType"] == 0 and chat_id in official_ids
-            if is_official and not include_official:
+        for chat in directory:
+            if unread_only and chat["unread_count"] == 0:
                 continue
-            if needle and needle not in name.casefold():
+            if cutoff is not None and chat["updated_at_ms"] < cutoff:
                 continue
-            chats.append(
-                {
-                    "chat_id": chat_id,
-                    "name": name,
-                    "type": _chat_type(row["_midType"]),
-                    "updated_at": _iso_time(row["_lastUpdatedTime"]),
-                    "unread_count": row["_unreadCount"] or 0,
-                    "is_official": is_official,
-                }
-            )
-            if len(chats) >= limit:
-                break
-        return {"chats": chats, "count": len(chats)}
+            if chat["is_official"] and not include_official:
+                continue
+            if needle and needle not in chat["name"].casefold():
+                continue
+            matched_chats.append(self._public_chat(chat))
+        chats = matched_chats[:limit]
+        return {
+            "chats": chats,
+            "count": len(chats),
+            "total_matched": len(matched_chats),
+            "has_more": len(matched_chats) > len(chats),
+            "snapshot_id": snapshot_id,
+        }
 
     def _format_messages(
         self,
@@ -190,22 +387,33 @@ class LineRepository:
     ) -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = []
         for row in rows:
-            text, was_redacted = self._safe_text(_message_text(row))
+            raw_metadata = _metadata_dict(row)
+            raw_text, text_source = _message_text(row, raw_metadata)
+            text, text_redacted = self._safe_text(raw_text)
+            content_metadata, metadata_redacted = self._safe_content_metadata(
+                raw_metadata
+            )
             chat_id = row["_chatId"]
             sender_id = row.get("_from")
             messages.append(
                 {
                     "message_id": row["_id"],
                     "chat_id": chat_id,
-                    "chat_name": self._chat_name(chat_id, row["_midType"], contacts, groups, rooms),
+                    "chat_name": self._chat_name(
+                        chat_id, row["_midType"], contacts, groups, rooms
+                    ),
                     "chat_type": _chat_type(row["_midType"]),
                     "is_official": row["_midType"] == 0 and chat_id in official_ids,
                     "sent_at": _iso_time(row["_createdTime"]),
-                    "sender_name": "Me" if sender_id == me else contacts.get(sender_id, sender_id or "Unknown"),
+                    "sender_name": "Me"
+                    if sender_id == me
+                    else contacts.get(sender_id, sender_id or "Unknown"),
                     "from_me": sender_id == me,
                     "text": text,
+                    "text_source": text_source,
                     "content_type": row.get("_contentType"),
-                    "redacted": was_redacted,
+                    "content_metadata": content_metadata,
+                    "redacted": text_redacted or metadata_redacted,
                 }
             )
         return messages
@@ -231,21 +439,25 @@ class LineRepository:
             params.append(before_ms)
         with self.database.connection() as connection:
             cursor = connection.cursor()
-            me = self._profile_mid(cursor)
-            contacts, groups, rooms, official_ids = self._name_maps(cursor)
+            snapshot_id = self._snapshot_id(connection)
+            cache_token = self._cache_token(connection)
+            me = self._profile_mid(cursor, cache_token)
+            contacts, groups, rooms, official_ids = self._name_maps(cursor, cache_token)
             rows = list(
                 cursor.execute(
                     f"""
                     SELECT m._id, m._chatId, m._from, m._createdTime, m._text,
-                           m._contentPreview, m._contentMetadata, m._contentType, c._midType
+                           m._contentPreview, m._contentMetadata, m._contentType, c._midType,
+                           COUNT(*) OVER () AS total_count
                     FROM _message m JOIN _chat c ON c._id = m._chatId
-                    WHERE {' AND '.join(clauses)}
-                    ORDER BY m._createdTime DESC
+                    WHERE {" AND ".join(clauses)}
+                    ORDER BY m._createdTime DESC, m._id DESC
                     LIMIT ?
                     """,
                     (*params, limit),
                 )
             )
+            total_matched = rows[0]["total_count"] if rows else 0
         rows.reverse()
         messages = self._format_messages(
             rows,
@@ -255,7 +467,14 @@ class LineRepository:
             rooms=rooms,
             official_ids=official_ids,
         )
-        return {"chat_id": chat_id, "messages": messages, "count": len(messages)}
+        return {
+            "chat_id": chat_id,
+            "messages": messages,
+            "count": len(messages),
+            "total_matched": total_matched,
+            "has_more": total_matched > len(messages),
+            "snapshot_id": snapshot_id,
+        }
 
     def search_messages(
         self,
@@ -271,10 +490,22 @@ class LineRepository:
         if not query:
             raise ValueError("query must not be empty")
         limit = max(1, min(limit, 200))
-        clauses = ["(m._text LIKE ? ESCAPE '\\' OR m._contentPreview LIKE ? ESCAPE '\\')"]
         escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         pattern = f"%{escaped}%"
-        params: list[Any] = [pattern, pattern]
+        searchable_metadata = (
+            "CASE WHEN json_valid(m._contentMetadata) "
+            "THEN COALESCE(json_extract(m._contentMetadata, '$.ALT_TEXT'), '') || ' ' || "
+            "COALESCE(json_extract(m._contentMetadata, '$.altText'), '') || ' ' || "
+            "COALESCE(json_extract(m._contentMetadata, '$.text'), '') || ' ' || "
+            "COALESCE(json_extract(m._contentMetadata, '$.title'), '') ELSE '' END"
+        )
+        clauses = [
+            (
+                f"(m._text LIKE ? ESCAPE '\\' OR m._contentPreview LIKE ? ESCAPE '\\' "
+                f"OR {searchable_metadata} LIKE ? ESCAPE '\\')"
+            )
+        ]
+        params: list[Any] = [pattern, pattern, pattern]
         if chat_id:
             clauses.append("m._chatId = ?")
             params.append(chat_id)
@@ -286,30 +517,34 @@ class LineRepository:
         if before_ms is not None:
             clauses.append("m._createdTime < ?")
             params.append(before_ms)
+        if not include_official:
+            clauses.append(
+                "NOT (c._midType = 0 AND EXISTS ("
+                "SELECT 1 FROM _contact official_contact "
+                "WHERE official_contact._mid = m._chatId "
+                "AND official_contact._capableBuddy = 1))"
+            )
         with self.database.connection() as connection:
             cursor = connection.cursor()
-            me = self._profile_mid(cursor)
-            contacts, groups, rooms, official_ids = self._name_maps(cursor)
+            snapshot_id = self._snapshot_id(connection)
+            cache_token = self._cache_token(connection)
+            me = self._profile_mid(cursor, cache_token)
+            contacts, groups, rooms, official_ids = self._name_maps(cursor, cache_token)
             rows = list(
                 cursor.execute(
                     f"""
                     SELECT m._id, m._chatId, m._from, m._createdTime, m._text,
-                           m._contentPreview, m._contentMetadata, m._contentType, c._midType
+                           m._contentPreview, m._contentMetadata, m._contentType, c._midType,
+                           COUNT(*) OVER () AS total_count
                     FROM _message m JOIN _chat c ON c._id = m._chatId
-                    WHERE {' AND '.join(clauses)}
-                    ORDER BY m._createdTime DESC
+                    WHERE {" AND ".join(clauses)}
+                    ORDER BY m._createdTime DESC, m._id DESC
                     LIMIT ?
                     """,
-                    (*params, min(limit * 8, 1600)),
+                    (*params, limit),
                 )
             )
-        if not include_official:
-            rows = [
-                row
-                for row in rows
-                if not (row["_midType"] == 0 and row["_chatId"] in official_ids)
-            ]
-        rows = rows[:limit]
+            total_matched = rows[0]["total_count"] if rows else 0
         messages = self._format_messages(
             rows,
             me=me,
@@ -318,7 +553,14 @@ class LineRepository:
             rooms=rooms,
             official_ids=official_ids,
         )
-        return {"query": query, "messages": messages, "count": len(messages)}
+        return {
+            "query": query,
+            "messages": messages,
+            "count": len(messages),
+            "total_matched": total_matched,
+            "has_more": total_matched > len(messages),
+            "snapshot_id": snapshot_id,
+        }
 
     def recent_activity(
         self,
@@ -333,69 +575,166 @@ class LineRepository:
         messages_per_chat = max(1, min(messages_per_chat, 100))
         cutoff = datetime.now().astimezone() - timedelta(hours=hours)
         after = cutoff.isoformat()
-        cutoff_ms = int(cutoff.timestamp() * 1000)
+        activity = self._activity_window(
+            after_ms=int(cutoff.timestamp() * 1000),
+            before_ms=None,
+            name_contains=None,
+            chat_limit=chat_limit,
+            messages_per_chat=messages_per_chat,
+            include_official=include_official,
+        )
+        return {"since": after, "hours": hours, **activity}
+
+    def read_chat_activity(
+        self,
+        name_contains: str,
+        *,
+        after: str,
+        before: str,
+        chat_limit: int = 20,
+        messages_per_chat: int = 200,
+        include_official: bool = False,
+    ) -> dict[str, Any]:
+        name_contains = name_contains.strip()
+        if not name_contains:
+            raise ValueError("name_contains must not be empty")
+        chat_limit = max(1, min(chat_limit, 100))
+        messages_per_chat = max(1, min(messages_per_chat, 500))
+        after_ms = _to_millis(after)
+        before_ms = _to_millis(before)
+        if after_ms is None or before_ms is None:
+            raise ValueError("after and before are required")
+        activity = self._activity_window(
+            after_ms=after_ms,
+            before_ms=before_ms,
+            name_contains=name_contains,
+            chat_limit=chat_limit,
+            messages_per_chat=messages_per_chat,
+            include_official=include_official,
+        )
+        return {
+            "name_contains": name_contains,
+            "after": _iso_time(after_ms),
+            "before": _iso_time(before_ms),
+            **activity,
+        }
+
+    def _activity_window(
+        self,
+        *,
+        after_ms: int,
+        before_ms: int | None,
+        name_contains: str | None,
+        chat_limit: int,
+        messages_per_chat: int,
+        include_official: bool,
+    ) -> dict[str, Any]:
         with self.database.connection() as connection:
             cursor = connection.cursor()
-            me = self._profile_mid(cursor)
-            contacts, groups, rooms, official_ids = self._name_maps(cursor)
-            candidate_rows = list(
-                cursor.execute(
-                    """
-                    SELECT _id, _midType, _lastUpdatedTime, _unreadCount
-                    FROM _chat
-                    WHERE _lastUpdatedTime >= ?
-                    ORDER BY _lastUpdatedTime DESC
-                    LIMIT ?
-                    """,
-                    (cutoff_ms, min(chat_limit * 8, 1600)),
-                )
+            snapshot_id = self._snapshot_id(connection)
+            cache_token = self._cache_token(connection)
+            me = self._profile_mid(cursor, cache_token)
+            name_maps = self._name_maps(cursor, cache_token)
+            contacts, groups, rooms, official_ids = name_maps
+            directory = self._chat_directory(cursor, cache_token, name_maps)
+            source_newest_message_at = self._source_newest_message_at(
+                cursor, cache_token
             )
-            candidate_chats = []
-            for row in candidate_rows:
-                is_official = row["_midType"] == 0 and row["_id"] in official_ids
-                if is_official and not include_official:
+            needle = name_contains.casefold() if name_contains else None
+            candidates: ChatDirectory = []
+            for chat in directory:
+                if chat["is_official"] and not include_official:
                     continue
-                candidate_chats.append(
-                    {
-                        "chat_id": row["_id"],
-                        "name": self._chat_name(row["_id"], row["_midType"], contacts, groups, rooms),
-                        "type": _chat_type(row["_midType"]),
-                        "updated_at": _iso_time(row["_lastUpdatedTime"]),
-                        "unread_count": row["_unreadCount"] or 0,
-                        "is_official": is_official,
-                    }
+                if needle and needle not in chat["name"].casefold():
+                    continue
+                candidates.append(chat)
+
+            time_clauses = ["_createdTime >= ?"]
+            time_params: list[Any] = [after_ms]
+            if before_ms is not None:
+                time_clauses.append("_createdTime < ?")
+                time_params.append(before_ms)
+
+            message_counts: dict[str, int] = {}
+            latest_message_times: dict[str, int] = {}
+            candidate_ids = [chat["chat_id"] for chat in candidates]
+            for offset in range(0, len(candidate_ids), 500):
+                id_batch = candidate_ids[offset : offset + 500]
+                placeholders = ",".join("?" for _ in id_batch)
+                count_rows = cursor.execute(
+                    f"""
+                    SELECT _chatId, COUNT(*) AS total_count,
+                           MAX(_createdTime) AS latest_message_at
+                    FROM _message
+                    WHERE {" AND ".join(time_clauses)}
+                      AND _chatId IN ({placeholders})
+                    GROUP BY _chatId
+                    """,
+                    (*time_params, *id_batch),
                 )
-                if len(candidate_chats) >= chat_limit:
-                    break
+                for row in count_rows:
+                    message_counts[row["_chatId"]] = row["total_count"]
+                    latest_message_times[row["_chatId"]] = row["latest_message_at"]
+
+            matched_chats = [
+                chat
+                for chat in candidates
+                if message_counts.get(chat["chat_id"], 0) > 0
+            ]
+            matched_chats.sort(
+                key=lambda chat: (
+                    latest_message_times[chat["chat_id"]],
+                    chat["chat_id"],
+                ),
+                reverse=True,
+            )
+            total_matched_chats = len(matched_chats)
+            selected_chats = matched_chats[:chat_limit]
 
             grouped_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
-            chat_ids = [chat["chat_id"] for chat in candidate_chats]
+            chat_ids = [chat["chat_id"] for chat in selected_chats]
             if chat_ids:
                 placeholders = ",".join("?" for _ in chat_ids)
-                message_rows = list(
-                    cursor.execute(
-                        f"""
+                message_time_clauses = ["m._createdTime >= ?"]
+                message_params: list[Any] = [after_ms]
+                if before_ms is not None:
+                    message_time_clauses.append("m._createdTime < ?")
+                    message_params.append(before_ms)
+                message_time_clauses.append(f"m._chatId IN ({placeholders})")
+                message_params.extend(chat_ids)
+                if all(
+                    message_counts[chat_id] <= messages_per_chat for chat_id in chat_ids
+                ):
+                    message_sql = f"""
+                        SELECT m._id, m._chatId, m._from, m._createdTime, m._text,
+                               m._contentPreview, m._contentMetadata, m._contentType, c._midType
+                        FROM _message m JOIN _chat c ON c._id = m._chatId
+                        WHERE {" AND ".join(message_time_clauses)}
+                        ORDER BY m._createdTime ASC, m._id ASC
+                    """
+                else:
+                    message_sql = f"""
                         WITH ranked AS (
                           SELECT m._id, m._chatId, m._from, m._createdTime, m._text,
                                  m._contentPreview, m._contentMetadata, m._contentType, c._midType,
                                  ROW_NUMBER() OVER (
-                                   PARTITION BY m._chatId ORDER BY m._createdTime DESC
+                                   PARTITION BY m._chatId
+                                   ORDER BY m._createdTime DESC, m._id DESC
                                  ) AS message_rank
                           FROM _message m JOIN _chat c ON c._id = m._chatId
-                          WHERE m._createdTime >= ? AND m._chatId IN ({placeholders})
+                          WHERE {" AND ".join(message_time_clauses)}
                         )
                         SELECT * FROM ranked
                         WHERE message_rank <= ?
-                        ORDER BY _createdTime ASC
-                        """,
-                        (cutoff_ms, *chat_ids, messages_per_chat),
-                    )
-                )
+                        ORDER BY _createdTime ASC, _id ASC
+                    """
+                    message_params.append(messages_per_chat)
+                message_rows = list(cursor.execute(message_sql, message_params))
                 for row in message_rows:
                     grouped_rows[row["_chatId"]].append(row)
 
             activity = []
-            for chat in candidate_chats:
+            for chat in selected_chats:
                 rows = grouped_rows.get(chat["chat_id"], [])
                 if not rows:
                     continue
@@ -407,10 +746,20 @@ class LineRepository:
                     rooms=rooms,
                     official_ids=official_ids,
                 )
-                activity.append({**chat, "messages": messages})
+                activity.append({**self._public_chat(chat), "messages": messages})
+                activity[-1].update(
+                    {
+                        "message_count": len(messages),
+                        "total_matched_messages": message_counts[chat["chat_id"]],
+                        "messages_have_more": message_counts[chat["chat_id"]]
+                        > len(messages),
+                    }
+                )
         return {
-            "since": after,
-            "hours": hours,
+            "source_newest_message_at": _iso_time(source_newest_message_at),
             "chats": activity,
             "chat_count": len(activity),
+            "total_matched_chats": total_matched_chats,
+            "has_more_chats": total_matched_chats > len(selected_chats),
+            "snapshot_id": snapshot_id,
         }

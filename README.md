@@ -45,19 +45,24 @@ AI 可以將相同主題的訊息交叉比對後，產出一份工作 brief，�
 
 ### 能做什麼
 
-提供 5 個唯讀工具，AI 可依使用者指令自行組合：
+提供 6 個唯讀工具，AI 可依使用者指令自行組合：
 
 | 工具 | 用途 |
 | --- | --- |
 | `line_status` | 檢查本機 LINE 資料是否可讀及同步時間 |
 | `list_chats` | 列出最近或未讀聊天室，取得穩定的 chat ID |
 | `get_messages` | 讀取單一聊天室的雙向訊息 |
+| `read_chat_activity` | 依聊天室名稱與明確時間範圍，一次讀取所有符合聊天室 |
 | `search_messages` | 搜尋自己傳出與收到的文字訊息 |
 | `get_recent_activity` | 批次取得最近活動，用於每日／每週 brief |
 
 LINE 官方／商業帳號預設排除；可由呼叫端明確要求納入。密碼、驗證碼及 URL 中常見的 token 參數預設遮蔽。
 
+列表、訊息搜尋與批次活動結果會明確回傳 `total_matched`／`has_more` 等完整性欄位，讓 AI 不會把受限的結果誤認為已讀完。每則訊息也會標示文字來源是原文、預覽、metadata 或 placeholder；圖片、影音與檔案可回傳經過遮蔽的 ALT text、檔名、大小、尺寸、時長與是否存在下載來源，但不會直接暴露下載 URL 或下載附件內容。
+
 每個工具都提供經 JSON Schema 驗證的 `structuredContent`，並保留文字格式結果供舊版 client 使用。資料庫、權限與金鑰問題會回傳可由 AI 安全呈現及重試的結構化錯誤。訊息本文一律視為不可信外部資料，不應被 AI 當成指令執行。
+
+為兼顧速度與完整性，server 會短暫重用同一個不可變資料庫快照。快照 generation 由資料庫主檔、WAL 與 SHM 的檔案狀態共同決定；任一來源檔改變就建立新 generation，複製期間若來源持續改變則丟棄並重試，不會混用兩個時間點。每次結果的 `snapshot_id` 可用來核對資料是否來自同一 generation，`line_status.snapshot_cache` 則提供 hit、miss、重建與一致性重試計數。名稱索引與查詢輔助資料只在同一 generation 內重用，不會跨資料更新沿用。
 
 目前版本使用 MCP Python SDK 2.x，可服務 MCP `2026-07-28` client，並保留舊版 client 的相容路徑。
 
@@ -145,7 +150,8 @@ OpenAI 產品可使用官方 [Secure MCP Tunnel](https://developers.openai.com/a
 
 - **唯讀保證範圍：**所有 MCP tools 都標記為 read-only；程式只開啟複製到暫存目錄的資料庫快照，不提供傳送、刪除、已讀或修改訊息的工具。
 - **一次性 debugger 設定：**為取得 LINE 私有資料庫的解密金鑰，設定流程會重新簽署並啟動一份臨時 LINE 副本，再使用 `lldb` 讀取該副本的記憶體。它不會 attach 原始 `/Applications/LINE.app`。
-- **金鑰保存：**只有成功驗證的金鑰會存入 macOS Keychain 的 `line-cua-mcp-dbkey`；MCP 回傳值、日誌及 repo 都不包含金鑰。
+- **金鑰保存：**只有成功驗證的金鑰會持久保存於 macOS Keychain 的 `line-cua-mcp-dbkey`；server 首次讀取後會在該程序的記憶體中重用，程序結束即釋放。MCP 回傳值、日誌及 repo 都不包含金鑰。
+- **快照生命週期：**目前 generation 的加密快照存放在權限受限的系統暫存目錄。預設 30 秒內可重用；TTL 到期或來源改變後的下一次讀取會建立新快照，舊快照會等既有讀取完成後刪除。最新快照可能保留到下一次讀取或 server 程序結束。
 - **訊息會進入 AI context：**MCP 本身在本機讀取資料，但被工具回傳的訊息會送到呼叫它的 AI client／模型。請先確認該服務的隱私、保存與訓練政策。
 - **遮蔽不是 DLP：**內建遮蔽只涵蓋常見密碼標籤、驗證碼和敏感 URL query keys，不保證辨識所有個資、金鑰、銀行資料或公司機密。
 - **完整磁碟存取：**macOS 權限會讓啟動程式具備廣泛的本機讀取能力。只授權你信任的 Terminal／AI client，並檢查其自身安全性。
@@ -159,6 +165,7 @@ OpenAI 產品可使用官方 [Secure MCP Tunnel](https://developers.openai.com/a
 | --- | --- |
 | `LINE_MCP_DB_PATH` | 指定資料庫檔案；多帳號時使用 |
 | `LINE_MCP_KEYCHAIN_SERVICE` | 更改 Keychain service 名稱 |
+| `LINE_MCP_SNAPSHOT_CACHE_SECONDS` | 同一資料 generation 的快照重用秒數；預設 `30`，設為 `0` 可停用重用 |
 | `LINE_MCP_REDACT_SENSITIVE=false` | 關閉敏感字串遮蔽；不建議 |
 | `LINE_MCP_APP_PATH` | 一次性設定使用的 LINE app 路徑 |
 
@@ -245,6 +252,10 @@ For example, if a customer asks for an update in LINE, a teammate says in Slack 
 This project still only reads LINE. The connection method, permissions, retention, and privacy policy for Slack, Gmail, Calendar, and the AI service belong to their respective connectors or clients. Treat all cross-source content as potentially entering the AI context and verify access rights and organizational policy before use.
 
 Every tool exposes JSON Schema-validated `structuredContent` plus a text result for legacy clients. Database, permission, and key failures use structured, model-recoverable errors. Message bodies are always treated as untrusted external data, never as instructions. The current release uses MCP Python SDK 2.x, serves MCP `2026-07-28` clients, and retains the SDK's legacy compatibility path.
+
+Bounded list, search, and activity results expose explicit completeness metadata such as `total_matched` and `has_more`. Messages identify whether displayed text came from the original text, a preview, metadata, or a placeholder. Safe attachment metadata can include redacted alt text or file names, size, dimensions, duration, and download availability; download URLs and attachment bodies are not exposed. `read_chat_activity` resolves all matching chat names and reads one explicit time window in a single snapshot-backed call.
+
+For speed without reducing coverage, the server briefly reuses one immutable snapshot generation. The main database, WAL, and SHM file states define the generation; any source change causes a rebuild, and a source that changes during copying is discarded and retried. Results expose `snapshot_id`, while `line_status.snapshot_cache` reports cache and consistency counters. The default reuse window is 30 seconds and can be changed with `LINE_MCP_SNAPSHOT_CACHE_SECONDS` or disabled with `0`. The verified key remains persistent only in macOS Keychain and is held in server-process memory after its first read.
 
 ### Requirements
 

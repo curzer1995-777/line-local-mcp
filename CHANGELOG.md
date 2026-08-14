@@ -4,6 +4,25 @@ All notable changes to this project are documented here. The project follows [Se
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-15
+
+### Added
+
+- `read_chat_activity` for resolving all matching chat names and reading one explicit time window in a single snapshot-backed tool call.
+- Explicit result completeness fields for bounded chat, message, search, and activity results.
+- Safe structured message metadata for alt text, file names, sizes, dimensions, durations, media types, and attachment availability without exposing download URLs.
+- Message text provenance distinguishing original text, previews, metadata, and placeholders.
+- Generation identifiers and snapshot-cache diagnostics in structured results.
+
+### Changed
+
+- Chat-name filtering now evaluates every eligible chat instead of a fixed over-fetched candidate window.
+- Literal message search also covers safe textual metadata and applies official-account filtering before result limits.
+- Reuse an immutable, generation-aware encrypted-database snapshot and in-process Keychain value for the configured short TTL; source, WAL, or SHM changes invalidate reuse.
+- Verify source fingerprints before and after copying, retry changing sources, and retain leased generations until active readers finish.
+- Cache chat/name indexes per generation, combine bounded rows and exact match counts in one query, and use exact per-chat index seeks for the newest-message timestamp.
+- Select and order recent activity by exact message timestamps rather than potentially stale chat metadata.
+
 ## [0.2.0] - 2026-08-14
 
 ### Added
@@ -30,6 +49,7 @@ All notable changes to this project are documented here. The project follows [Se
 - macOS installer, diagnostic command, synthetic test suite, and GitHub Actions CI.
 - Bilingual project origin, setup, security, privacy, troubleshooting, and limitation documentation.
 
-[Unreleased]: https://github.com/curzer1995-777/line-local-mcp/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/curzer1995-777/line-local-mcp/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/curzer1995-777/line-local-mcp/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/curzer1995-777/line-local-mcp/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/curzer1995-777/line-local-mcp/releases/tag/v0.1.0
