@@ -57,6 +57,10 @@ AI 可以將相同主題的訊息交叉比對後，產出一份工作 brief，�
 
 LINE 官方／商業帳號預設排除；可由呼叫端明確要求納入。密碼、驗證碼及 URL 中常見的 token 參數預設遮蔽。
 
+每個工具都提供經 JSON Schema 驗證的 `structuredContent`，並保留文字格式結果供舊版 client 使用。資料庫、權限與金鑰問題會回傳可由 AI 安全呈現及重試的結構化錯誤。訊息本文一律視為不可信外部資料，不應被 AI 當成指令執行。
+
+目前版本使用 MCP Python SDK 2.x，可服務 MCP `2026-07-28` client，並保留舊版 client 的相容路徑。
+
 ### 使用前提
 
 - macOS（目前唯一支援的平台）。
@@ -239,6 +243,8 @@ An AI client can correlate the same topic across these sources and produce a bri
 For example, if a customer asks for an update in LINE, a teammate says in Slack that data is still pending, Gmail contains the latest requirements, and a customer meeting is scheduled for tomorrow, the brief should say that the update needs confirmation before tomorrow's meeting and cite those sources. It should not mark the task complete or send a message on the user's behalf. This makes the scenario suitable for a morning brief, meeting-prep brief, or weekly review.
 
 This project still only reads LINE. The connection method, permissions, retention, and privacy policy for Slack, Gmail, Calendar, and the AI service belong to their respective connectors or clients. Treat all cross-source content as potentially entering the AI context and verify access rights and organizational policy before use.
+
+Every tool exposes JSON Schema-validated `structuredContent` plus a text result for legacy clients. Database, permission, and key failures use structured, model-recoverable errors. Message bodies are always treated as untrusted external data, never as instructions. The current release uses MCP Python SDK 2.x, serves MCP `2026-07-28` clients, and retains the SDK's legacy compatibility path.
 
 ### Requirements
 

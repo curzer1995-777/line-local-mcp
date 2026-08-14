@@ -14,7 +14,20 @@ from .config import Settings
 
 
 class LineDatabaseError(RuntimeError):
-    """A safe-to-display error while opening the local LINE database."""
+    """A structured, safe-to-display error while opening the local LINE database."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "DATABASE_UNAVAILABLE",
+        retryable: bool = False,
+        suggested_action: str | None = None,
+    ):
+        super().__init__(message)
+        self.code = code
+        self.retryable = retryable
+        self.suggested_action = suggested_action
 
 
 @contextlib.contextmanager
@@ -60,10 +73,16 @@ def key_from_macos_keychain(service: str) -> str:
         ).strip()
     except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         raise LineDatabaseError(
-            f"LINE database key is unavailable in macOS Keychain service '{service}'."
+            f"LINE database key is unavailable in macOS Keychain service '{service}'.",
+            code="KEY_MISSING",
+            suggested_action="Run line-local-mcp --setup-key, then retry the request.",
         ) from exc
     if not value:
-        raise LineDatabaseError("LINE database key in macOS Keychain is empty.")
+        raise LineDatabaseError(
+            "LINE database key in macOS Keychain is empty.",
+            code="KEY_MISSING",
+            suggested_action="Run line-local-mcp --setup-key, then retry the request.",
+        )
     return value
 
 
@@ -77,12 +96,18 @@ class LineDatabase:
         if self.settings.db_path is not None:
             path = self.settings.db_path.resolve()
             if not path.is_file():
-                raise LineDatabaseError("Configured LINE database file does not exist.")
+                raise LineDatabaseError(
+                    "Configured LINE database file does not exist.",
+                    code="DATABASE_NOT_FOUND",
+                    suggested_action="Check LINE_MCP_DB_PATH or remove it to use automatic discovery.",
+                )
             return path
         candidates = discover_line_databases()
         if not candidates:
             raise LineDatabaseError(
-                "No LINE Desktop database was found. Install and sign in to LINE Desktop on this Mac."
+                "No LINE Desktop database was found. Install and sign in to LINE Desktop on this Mac.",
+                code="DATABASE_NOT_FOUND",
+                suggested_action="Open LINE Desktop, sign in, wait for synchronization, then retry.",
             )
         return candidates[0]
 
@@ -112,7 +137,13 @@ class LineDatabase:
             raise
         except (OSError, apsw.Error) as exc:
             raise LineDatabaseError(
-                "LINE Desktop database could not be opened read-only. Check Full Disk Access and the stored key."
+                "LINE Desktop database could not be opened read-only. Check Full Disk Access and the stored key.",
+                code="DATABASE_UNREADABLE",
+                retryable=True,
+                suggested_action=(
+                    "Grant Full Disk Access to the MCP launcher; if access is already granted, "
+                    "run line-local-mcp --setup-key and retry."
+                ),
             ) from exc
 
     def modified_at(self) -> float:
@@ -124,7 +155,12 @@ class LineDatabase:
                 with contextlib.suppress(OSError):
                     mtimes.append(candidate.stat().st_mtime)
         if not mtimes:
-            raise LineDatabaseError("LINE database disappeared while checking its freshness.")
+            raise LineDatabaseError(
+                "LINE database disappeared while checking its freshness.",
+                code="DATABASE_NOT_FOUND",
+                retryable=True,
+                suggested_action="Open LINE Desktop, wait for synchronization, then retry.",
+            )
         return max(mtimes)
 
 
