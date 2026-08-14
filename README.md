@@ -17,7 +17,7 @@
 | **一致性 / Consistency** | 同時追蹤資料庫主檔、WAL 與 SHM；來源改變即建立新 generation，複製途中發生變動則丟棄並重試，既有讀取仍固定在原快照。<br>Source changes invalidate reuse, changing copies are retried, and in-flight readers stay on one immutable generation. |
 | **資料精細度 / Fidelity** | 新增 `snapshot_id`、文字來源、精確總數及安全的附件 metadata；近期活動改以實際訊息時間篩選與排序，不依賴可能落後的聊天室更新欄位。<br>Adds provenance, exact counts, safe attachment metadata, and exact message-time activity ordering. |
 
-> 單機真實資料基準：2 個 ELC 聊天室、24 則訊息皆完整且無重複；穩態 MCP 中位數 18.5 ms、P95 21.5 ms。效能會依 Mac、資料庫大小與 LINE 同步狀態而異。<br>Local real-data benchmark: 2 ELC chats and 24 unique messages, with an 18.5 ms steady-state MCP median and 21.5 ms P95; results vary by device, database size, and sync state.
+> 單機真實資料基準：2 個匹配聊天室、24 則訊息皆完整且無重複；穩態 MCP 中位數 18.5 ms、P95 21.5 ms。效能會依 Mac、資料庫大小與 LINE 同步狀態而異。<br>Local real-data benchmark: 2 matching chats and 24 unique messages, with an 18.5 ms steady-state MCP median and 21.5 ms P95; results vary by device, database size, and sync state.
 
 [查看 v0.3.0 Release / View the v0.3.0 release](https://github.com/curzer1995-777/line-local-mcp/releases/tag/v0.3.0)
 
