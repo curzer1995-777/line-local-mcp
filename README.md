@@ -8,6 +8,19 @@
 
 > **Beta / macOS only / unofficial project.** This project is not affiliated with, endorsed by, or sponsored by LY Corporation or LINE. It accesses private, undocumented local storage that may change without notice.
 
+## v0.3.0 最新更新 / What's new
+
+| 重點 | 更新內容 |
+| --- | --- |
+| **完整度 / Completeness** | 新增 `read_chat_activity`，可依聊天室名稱與明確時間範圍一次讀取所有符合對話；列表、搜尋與活動結果現在會回傳 `total_matched`、`has_more` 及逐聊天室覆蓋資訊。<br>Adds one-call named-chat activity reads and explicit coverage metadata so bounded output is never mistaken for a complete scan. |
+| **速度 / Speed** | 短暫重用不可變資料庫快照、Keychain 金鑰及同一 generation 的名稱／聊天室索引，在不減少資料範圍的前提下降低重複讀取成本。<br>Reuses an immutable snapshot and generation-scoped indexes without reducing query coverage. |
+| **一致性 / Consistency** | 同時追蹤資料庫主檔、WAL 與 SHM；來源改變即建立新 generation，複製途中發生變動則丟棄並重試，既有讀取仍固定在原快照。<br>Source changes invalidate reuse, changing copies are retried, and in-flight readers stay on one immutable generation. |
+| **資料精細度 / Fidelity** | 新增 `snapshot_id`、文字來源、精確總數及安全的附件 metadata；近期活動改以實際訊息時間篩選與排序，不依賴可能落後的聊天室更新欄位。<br>Adds provenance, exact counts, safe attachment metadata, and exact message-time activity ordering. |
+
+> 單機真實資料基準：2 個 ELC 聊天室、24 則訊息皆完整且無重複；穩態 MCP 中位數 18.5 ms、P95 21.5 ms。效能會依 Mac、資料庫大小與 LINE 同步狀態而異。<br>Local real-data benchmark: 2 ELC chats and 24 unique messages, with an 18.5 ms steady-state MCP median and 21.5 ms P95; results vary by device, database size, and sync state.
+
+[查看 v0.3.0 Release / View the v0.3.0 release](https://github.com/curzer1995-777/line-local-mcp/releases/tag/v0.3.0)
+
 ## 繁體中文
 
 LINE Local MCP 是一個唯讀的 [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server，讓支援 MCP 的 AI 可以快速搜尋使用者自己 Mac 上的 LINE Desktop 對話紀錄，包括自己傳出與對方傳入的訊息。
